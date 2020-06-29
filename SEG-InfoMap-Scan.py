@@ -1,0 +1,170 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Jun 29 17:10:41 2020
+
+@author: sszgrm
+"""
+
+# TODOS
+# - Tabelle mit InformationMaps
+# - Tabelle mit Feldnamen (impact analyse)
+# - Handling von %include-statements
+# --- Sie sollten in einen Backlog aufgenommen werden und separat verwendet werden
+# - "archiv" im Namen des Pfades 
+# gefundene Beispiel: "\Archiv\", "\alt\", "\Archiv_nicht-löschen\", "\_Archiv\"
+
+import zipfile
+import re
+import os
+import xml.etree.ElementTree as ET
+
+
+
+# unzip one file from a zip archive to a given directory
+def proj_unzip(zip_path, extract_filename, extract_path):
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extract(extract_filename, path=extract_path)
+        return extract_path + "/" + extract_filename
+
+
+
+# read project.xml as xml an find clicked InformationMap elements
+
+    # <InformationMap_List>
+    #     <InformationMap>
+    #         <Element>
+    #             <Label>BVS Zuzug int.</Label>
+    #             <Type>INFORMATIONMAP</Type>
+    #             <ModifiedOn>636123019566140409</ModifiedOn>
+    #             <ModifiedBy>Möhr Philipp (SSZ)</ModifiedBy>
+
+def extract_infomap_meta(project_file):
+    infomap_list_meta = []
+    root = ET.parse(project_file).getroot()
+    
+    for type_tag in root.findall('InformationMap_List/InformationMap/Element'):
+        im_list = {}
+        for child in type_tag:   
+            if child.tag=="Label": im_list["infomap_name"] = child.text
+            if child.tag=="ModifiedOn": im_list["modified_at"] = child.text
+            if child.tag=="ModifiedBy": im_list["modified_by"] = child.text
+        infomap_list_meta.append(im_list)
+    return infomap_list_meta
+
+
+
+# read project.xml as a textfile an find infomap codeblocks
+
+# libname _egimle sasioime
+# 	 mappath="/InformationMaps/Bevoelkerung/BVS Wegzug int."
+# 	 aggregate=yes
+# 	 metacredentials=no
+# 	 PRESERVE_MAP_NAMES=YES
+# 	 %SetDisplayOrder;
+# /* NOTE: when using this LIBNAME statement in a batch environment,  */
+# /* you might need to add metadata host and credentials information. */
+#
+# data WORK.WEG (label='Ausgewählte Daten von BVS Wegzug int.');
+# 	sysecho "Extrahieren von Daten aus der Information Map";
+# 	length 
+# 		FilterJahr 8
+# 		StichtagDatJahr 8
+# 		AnzWezuWir 8
+# 		HerkunftSort 8
+# 		ExportVersionCd $ 200
+# 		;
+# 	label 
+# 		FilterJahr="Jahresfilter"  /* Jahresfilter */
+# 		StichtagDatJahr="Daten gültig per Jahr"  /* Daten gültig per Jahr */
+# 		AnzWezuWir="Anzahl Wegzüge wirtschaftlich"  /* Anzahl Wegzüge wirtschaftlich */
+# 		HerkunftSort="Herkunft (Sort)"  /* Herkunft (Sort) */
+# 		ExportVersionCd="Exportversion (Code)"  /* Exportversion (Code) */
+# 		;
+# 	
+# 	set _egimle."BVS Wegzug int."n 
+# 		(keep=
+# 			FilterJahr
+# 			StichtagDatJahr
+# 			AnzWezuWir
+# 			HerkunftSort
+# 			ExportVersionCd 
+# 		 /* default EXPCOLUMNLEN is 32 */ 
+# 		 filter=((FilterJahr &gt;= 1) AND NOT (ExportVersionCd = "A")) 
+# 		 
+# 		 );
+# 	
+# run;
+#
+# /* clear the libname when complete */
+# libname _egimle clear;
+
+
+def extract_infomap_code(project_file):
+    infomap_list_code = []
+    len_list = []
+    is_im_block = False
+    is_len_block = False
+    i=0
+    
+    with open(project_file, encoding="utf16") as f:
+        content = f.readlines()
+        for x in content:
+            line = x.strip()
+            i = i + 1
+            if line == "libname _egimle sasioime": 
+                # code block with libname starting
+                im_list = {}
+                is_im_block = True
+            if line == "libname _egimle clear;": 
+                infomap_list_code.append(im_list)
+                is_len_block = False
+                is_im_block = False
+            
+            if is_im_block == True:
+                mappath_search = re.search('mappath="(.*)"', line, re.IGNORECASE)
+                if mappath_search:
+                    # extract infomap name as the text behind the last slash
+                    im_list["infomap_name"] = mappath_search.group(1).rsplit('/', 1)[-1]
+    
+                if is_len_block == True:
+                    if line == ";":
+                        # end of code block with length variable definitions
+                        im_list["variables"] = len_list
+                        is_len_block = False
+                    else:
+                        # add this variable definition to the list
+                        len_list.append(line)
+                    
+                if line == "length":
+                    # code block with length variable definition starting
+                    len_list = []
+                    is_len_block = True
+    return infomap_list_code
+
+
+temp_unzip_path = "H:/Daten/Project/Desktop-2020/SampleSEG/tempunzip"
+proj_filename = "project.xml"
+
+root_path = "O:/Auswertungen/Hotellerie"
+root_path = "H:/Daten/Project/Desktop-2020/SampleSEG"
+root_path = "O:/Auswertungen/Mobilitaet-Verkehr"
+
+
+# traverse root directory, and list directories as dirs and files as files
+for root, dirs, files in os.walk(root_path):
+    for file in files:
+        if file.endswith(".egp"):
+            seg_path = os.path.join(root, file).replace('\\', '/')
+            print(seg_path)
+
+            # unzip the project.xml file from the egp-file (which is a zip-file)
+            proj_fullpath = proj_unzip(seg_path, proj_filename, temp_unzip_path)
+            
+            # find all informationmaps in xml tags
+            im_list_meta = extract_infomap_meta(proj_fullpath)
+            print(im_list_meta)
+            
+            im_list_code = extract_infomap_code(proj_fullpath)
+            print(im_list_code)
+
+
