@@ -17,8 +17,8 @@ import zipfile
 import re
 import os
 import xml.etree.ElementTree as ET
-
-
+import pandas as pd
+import numpy as np
 
 # unzip one file from a zip archive to a given directory
 def proj_unzip(zip_path, extract_filename, extract_path):
@@ -145,26 +145,61 @@ def extract_infomap_code(project_file):
 temp_unzip_path = "H:/Daten/Project/Desktop-2020/SampleSEG/tempunzip"
 proj_filename = "project.xml"
 
-root_path = "O:/Auswertungen/Hotellerie"
-root_path = "H:/Daten/Project/Desktop-2020/SampleSEG"
 root_path = "O:/Auswertungen/Mobilitaet-Verkehr"
+root_path = "H:/Daten/Project/Desktop-2020/SampleSEG"
+root_path = "O:/Auswertungen/Hotellerie"
 
+excel_out = "H:/Daten/Project/Desktop-2020/SampleSEG/report.xlsx"
+
+df_im_meta = pd.DataFrame()
+df_im_code = pd.DataFrame()
 
 # traverse root directory, and list directories as dirs and files as files
 for root, dirs, files in os.walk(root_path):
     for file in files:
         if file.endswith(".egp"):
             seg_path = os.path.join(root, file).replace('\\', '/')
-            print(seg_path)
+            # print(seg_path)
 
             # unzip the project.xml file from the egp-file (which is a zip-file)
             proj_fullpath = proj_unzip(seg_path, proj_filename, temp_unzip_path)
             
             # find all informationmaps in xml tags
             im_list_meta = extract_infomap_meta(proj_fullpath)
-            print(im_list_meta)
+            # print(im_list_meta)
             
             im_list_code = extract_infomap_code(proj_fullpath)
-            print(im_list_code)
+            # print(im_list_code)
+
+            df_list_meta = pd.DataFrame(im_list_meta)
+            df_list_meta['seg_path']=seg_path
+            df_im_meta = df_im_meta.append(df_list_meta, ignore_index = True)
+
+            df_list_code = pd.DataFrame(im_list_code)
+            df_list_code['seg_path']=seg_path
+            df_im_code = df_im_code.append(df_list_code, ignore_index = True)
 
 
+df_im_meta = df_im_meta.sort_values(by='modified_at', ascending=False)
+df_im_meta = df_im_meta.drop_duplicates(subset='infomap_name', keep='first')
+print(df_im_meta)
+
+# write-mode to create a new excel sheet 
+with pd.ExcelWriter(excel_out, engine="openpyxl", mode='w') as writer:
+    df_im_meta.to_excel(writer, sheet_name='Meta')
+
+# transpose the variables column containing a list of variables to a new row variables
+lst_col = 'variables'
+df_im_transv = pd.DataFrame({
+      col:np.repeat(df_im_code[col].values, df_im_code[lst_col].str.len())
+      for col in df_im_code.columns.drop(lst_col)}
+    ).assign(**{lst_col:np.concatenate(df_im_code[lst_col].values)})[df_im_code.columns]
+
+df_im_transv = df_im_transv.drop_duplicates()
+
+print(df_im_transv)
+
+# append-mode to create a new sheet in the existing excel file
+with pd.ExcelWriter(excel_out, engine="openpyxl", mode='a') as writer:
+    df_im_transv.to_excel(writer, sheet_name='Code')
+    
