@@ -6,12 +6,11 @@ Created on Mon Jun 29 17:10:41 2020
 """
 
 # TODOS
-# - Tabelle mit InformationMaps
-# - Tabelle mit Feldnamen (impact analyse)
+# - Verarbeiten von mehreren Verzeichnissen
+# - Skalierbare Version mit Ablage in Datenbank
+# - Error-Handling z.B. "BadZipFile: File is not a zip file"
 # - Handling von %include-statements
 # --- Sie sollten in einen Backlog aufgenommen werden und separat verwendet werden
-# - "archiv" im Namen des Pfades 
-# gefundene Beispiel: "\Archiv\", "\alt\", "\Archiv_nicht-löschen\", "\_Archiv\"
 
 import zipfile
 import re
@@ -19,6 +18,7 @@ import os
 import xml.etree.ElementTree as ET
 import pandas as pd
 import numpy as np
+import datetime
 
 # unzip one file from a zip archive to a given directory
 def proj_unzip(zip_path, extract_filename, extract_path):
@@ -141,51 +141,72 @@ def extract_infomap_code(project_file):
                     is_len_block = True
     return infomap_list_code
 
-
-temp_unzip_path = "H:/Daten/Project/Desktop-2020/SampleSEG/tempunzip"
+temp_path = "H:/Daten/Project/Desktop-2020/SampleSEG"
+temp_unzip_path = temp_path + "/tempunzip"
 proj_filename = "project.xml"
 
-root_path = "O:/Auswertungen/Mobilitaet-Verkehr"
+path_ignore = ["/archiv/", "/_archiv/", "/Archiv/", "/_Archiv/", "/archive/",
+               "/Archive", "/alt/", "/Alt/", "/Archiv_nicht-löschen/"]
+
 root_path = "H:/Daten/Project/Desktop-2020/SampleSEG"
 root_path = "O:/Auswertungen/Hotellerie"
+root_path = "O:/Auswertungen/Mobilitaet-Verkehr"
+root_path = "O:/Auswertungen"
+root_path = "O:/Auswertungen/Bevoelkerung"
 
-excel_out = "H:/Daten/Project/Desktop-2020/SampleSEG/report.xlsx"
+excel_out = temp_path + "/report.xlsx"
 
-df_im_meta = pd.DataFrame()
-df_im_code = pd.DataFrame()
 
+now = datetime.datetime.now()
+print ("Start walking directories: " + now.strftime("%Y-%m-%d %H:%M:%S"))
+
+list_seg = []
 # traverse root directory, and list directories as dirs and files as files
 for root, dirs, files in os.walk(root_path):
     for file in files:
         if file.endswith(".egp"):
             seg_path = os.path.join(root, file).replace('\\', '/')
-            # print(seg_path)
-
-            # unzip the project.xml file from the egp-file (which is a zip-file)
-            proj_fullpath = proj_unzip(seg_path, proj_filename, temp_unzip_path)
             
-            # find all informationmaps in xml tags
-            im_list_meta = extract_infomap_meta(proj_fullpath)
-            # print(im_list_meta)
-            
-            im_list_code = extract_infomap_code(proj_fullpath)
-            # print(im_list_code)
+            # check if path contains patterns like "archived" or "old" and ignore them
+            to_ignore = any(x in seg_path for x in path_ignore) 
+            if to_ignore==False:
+                list_seg.append(seg_path)
+ 
+df_list_seg = pd.DataFrame(list_seg, columns = ['seg_path'])
+# print(df_list_seg)
 
-            df_list_meta = pd.DataFrame(im_list_meta)
-            df_list_meta['seg_path']=seg_path
-            df_im_meta = df_im_meta.append(df_list_meta, ignore_index = True)
-
-            df_list_code = pd.DataFrame(im_list_code)
-            df_list_code['seg_path']=seg_path
-            df_im_code = df_im_code.append(df_list_code, ignore_index = True)
-
-
-df_im_meta = df_im_meta.sort_values(by='modified_at', ascending=False)
-df_im_meta = df_im_meta.drop_duplicates(subset='infomap_name', keep='first')
-print(df_im_meta)
-
-# write-mode to create a new excel sheet 
 with pd.ExcelWriter(excel_out, engine="openpyxl", mode='w') as writer:
+    df_list_seg.to_excel(writer, sheet_name='SEG-Projects')
+
+now = datetime.datetime.now()
+print ("Start extracting informationmaps: " + now.strftime("%Y-%m-%d %H:%M:%S"))
+
+df_im_meta = pd.DataFrame()
+df_im_code = pd.DataFrame()
+for index, row in df_list_seg.iterrows():
+    # unzip the project.xml file from the egp-file (which is a zip-file)
+    proj_fullpath = proj_unzip(row["seg_path"], proj_filename, temp_unzip_path)
+    
+    # find all informationmaps in xml tags of project.xml
+    im_list_meta = extract_infomap_meta(proj_fullpath)
+    # add the filename and store in a dataframe
+    df_list_meta = pd.DataFrame(im_list_meta)
+    df_list_meta['seg_path']=row["seg_path"]
+    df_im_meta = df_im_meta.append(df_list_meta, ignore_index = True)
+
+   # find alle informationmaps in the code element of project.xml
+    im_list_code = extract_infomap_code(proj_fullpath)
+    # add the filename and store in a dataframe
+    df_list_code = pd.DataFrame(im_list_code)
+    df_list_code['seg_path']=row["seg_path"]
+    df_im_code = df_im_code.append(df_list_code, ignore_index = True)
+
+# remove duplicates
+df_im_meta = df_im_meta.sort_values(by='modified_at', ascending=False)
+df_im_meta = df_im_meta.drop_duplicates(subset=['seg_path', 'infomap_name'], keep='first')
+
+# append-mode to create a new sheet in the existing excel file
+with pd.ExcelWriter(excel_out, engine="openpyxl", mode='a') as writer:
     df_im_meta.to_excel(writer, sheet_name='Meta')
 
 # transpose the variables column containing a list of variables to a new row variables
@@ -197,9 +218,9 @@ df_im_transv = pd.DataFrame({
 
 df_im_transv = df_im_transv.drop_duplicates()
 
-print(df_im_transv)
-
 # append-mode to create a new sheet in the existing excel file
 with pd.ExcelWriter(excel_out, engine="openpyxl", mode='a') as writer:
     df_im_transv.to_excel(writer, sheet_name='Code')
-    
+ 
+now = datetime.datetime.now()
+print ("Stop: " + now.strftime("%Y-%m-%d %H:%M:%S"))
