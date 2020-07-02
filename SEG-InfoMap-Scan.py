@@ -118,7 +118,7 @@ def extract_infomap_code(code_file, file_encoding):
                             # add this variable definition to the list
                             keep_list.append(line)
                     
-                if line == "(keep=":
+                if line[0:6] == "(keep=":
                      # code block with keep variable definition starting
                     keep_list = []
                     is_keep_block = True               
@@ -130,51 +130,64 @@ temp_unzip_path = temp_path + "/tempunzip"
 proj_filename = "project.xml"
 
 path_ignore = ["/archiv/", "/_archiv/", "/Archiv/", "/_Archiv/", "/archive/",
-               "/Archive", "/alt/", "/Alt/", "/Archiv_nicht-löschen/"]
+               "/Archive", "/alt/", "/Alt/", "/Archiv_nicht-löschen/",
+               "/00_Archiv/"]
 
-root_path = "H:/Daten/Project/Desktop-2020/SampleSEG"
-root_path = "O:/Auswertungen/Hotellerie"
-root_path = "O:/Auswertungen/Mobilitaet-Verkehr"
-root_path = "O:/Auswertungen"
-root_path = "O:/Auswertungen/Bevoelkerung"
-root_path = "P:/SAS/Siedlungsbericht/PROD"
+path_list = ["O:/Auswertungen/Hotellerie",
+             "O:/Auswertungen/Mobilitaet-Verkehr",
+             "O:/Auswertungen/Bevoelkerung",
+             "P:/SAS/Siedlungsbericht/PROD"]
+
+path_list = ["P:/Automat",
+             "P:/Hotellerie",
+             "P:/OGD/Daten",
+             "P:/SAS/Fuehrungskennzahlen",
+             "P:/SAS/Siedlungsbericht/PROD"]
 
 excel_out = temp_path + "/report.xlsx"
+write_to_excel = True
 
+csv_out = temp_path + "/infomap-var-list.csv"
 
 now = datetime.datetime.now()
 print ("Start walking directories: " + now.strftime("%Y-%m-%d %H:%M:%S"))
 
 list_seg = []
 list_sas = []
-# traverse root directory, and list directories as dirs and files as files
-for root, dirs, files in os.walk(root_path):
-    for file in files:
-        if file.endswith(".egp"):
-            seg_path = os.path.join(root, file).replace('\\', '/')
-            
-            # check if path contains patterns like "archived" or "old" and ignore them
-            to_ignore = any(x in seg_path for x in path_ignore) 
-            if to_ignore==False:
-                list_seg.append(seg_path)
 
-        if file.endswith(".sas"):
-            sas_path = os.path.join(root, file).replace('\\', '/')
-            
-            # check if path contains patterns like "archived" or "old" and ignore them
-            to_ignore = any(x in sas_path for x in path_ignore) 
-            if to_ignore==False:
-                list_sas.append(sas_path)
+for scan_path in path_list: 
+    print("Scanning: " + scan_path)
+    
+    # traverse root directory, and list directories as dirs and files as files
+    for root, dirs, files in os.walk(scan_path):
+        for file in files:
+            if file.endswith(".egp"):
+                seg_path = os.path.join(root, file).replace('\\', '/')
+                
+                # check if path contains patterns like "archived" or "old" and ignore them
+                to_ignore = any(x in seg_path for x in path_ignore) 
+                if to_ignore==False:
+                    list_seg.append(seg_path)
+    
+            if file.endswith(".sas"):
+                sas_path = os.path.join(root, file).replace('\\', '/')
+                
+                # check if path contains patterns like "archived" or "old" and ignore them
+                to_ignore = any(x in sas_path for x in path_ignore) 
+                if to_ignore==False:
+                    list_sas.append(sas_path)
 
 df_list_seg = pd.DataFrame(list_seg, columns = ['seg_path'])
 
 df_list_sas = pd.DataFrame(list_sas, columns = ['sas_path'])
 
-with pd.ExcelWriter(excel_out, engine="openpyxl", mode='w') as writer:
-    df_list_seg.to_excel(writer, sheet_name='SEG-Projects')
-    
-with pd.ExcelWriter(excel_out, engine="openpyxl", mode='a') as writer:
-    df_list_sas.to_excel(writer, sheet_name='SAS-Code-Files')
+if write_to_excel:
+    with pd.ExcelWriter(excel_out, engine="openpyxl", mode='w') as writer:
+        df_list_seg.to_excel(writer, sheet_name='SEG-Projects')
+        
+    with pd.ExcelWriter(excel_out, engine="openpyxl", mode='a') as writer:
+        df_list_sas.to_excel(writer, sheet_name='SAS-Code-Files')
+
 
 now = datetime.datetime.now()
 print ("Start extracting informationmaps: " + now.strftime("%Y-%m-%d %H:%M:%S"))
@@ -204,6 +217,7 @@ for index, row in df_list_sas.iterrows():
         df_list_code['filename']=row["sas_path"]
         df_im_code = df_im_code.append(df_list_code, ignore_index = True)
 
+
 if df_im_code.empty==False:
     # transpose the variables column containing a list of variables to a new row variables
     lst_col = 'variables_keep'
@@ -214,9 +228,12 @@ if df_im_code.empty==False:
  
     df_im_transv = df_im_transv.drop_duplicates()
     
-    # append-mode to create a new sheet in the existing excel file
-    with pd.ExcelWriter(excel_out, engine="openpyxl", mode='a') as writer:
-        df_im_transv.to_excel(writer, sheet_name='Code')
+    if write_to_excel:
+        # append-mode to create a new sheet in the existing excel file
+        with pd.ExcelWriter(excel_out, engine="openpyxl", mode='a') as writer:
+            df_im_transv.to_excel(writer, sheet_name='Code')
+        
+    df_im_transv.to_csv (csv_out, index = False, header=True)
  
 now = datetime.datetime.now()
 print ("Stop: " + now.strftime("%Y-%m-%d %H:%M:%S"))
