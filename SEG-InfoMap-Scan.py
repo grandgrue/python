@@ -6,15 +6,8 @@ Created on Mon Jun 29 17:10:41 2020
 """
 
 # TODOS
-# - Verarbeiten von mehreren Verzeichnissen
-# - Skalierbare Version mit Ablage in Datenbank
-# - Error-Handling z.B. "BadZipFile: File is not a zip file"
-# - Handling von %include-statements
-# --- Sie sollten in einen Backlog aufgenommen werden und separat verwendet werden
-# --- Includes zu suchen bringt nichts, da sie oft mit macro-variablen verborgen werden.
-# --- Anstelle sollen alle .sas Dateien auch indexiert werden
-# - Beim Code-Parsing nicht length, sondern keep nehmen - ist zuverlässiger
-# --- Kommentare berücksichtigen
+# - Verbesserung anstatt "Path too long" das File kopieren und lokal entzippen
+# --- Beispiel in: J:/Datenmanagement/4_DWH/2_Qualitätssicherung/1_BVS6/ 
 
 import zipfile
 import re
@@ -22,16 +15,25 @@ import os
 import pandas as pd
 import numpy as np
 import datetime
+import json
 
 pd.set_option('display.max_columns', None)
-#pd.set_option('display.max_rows', None)
+pd.set_option('display.max_rows', None)
 
 # unzip one file from a zip archive to a given directory
 def proj_unzip(zip_path, extract_filename, extract_path):
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        zip_ref.extract(extract_filename, path=extract_path)
-        return extract_path + "/" + extract_filename
-
+    if len(zip_path)>255:
+        # ZipFile does not support long paths
+        print("ERROR: Path too long: " + zip_path)
+        return
+    else:
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extract(extract_filename, path=extract_path)
+                return extract_path + "/" + extract_filename
+        except Exception: 
+            print('ERROR: Not unzippable: ' + zip_path) 
+            return
 
 # read project.xml as a textfile an find infomap codeblocks
 
@@ -95,8 +97,12 @@ def extract_infomap_code(code_file, file_encoding):
             if line == "libname _egimle sasioime": 
                 # code block with libname starting
                 im_list = {}
+                keep_list = []
                 is_im_block = True
             if line == "libname _egimle clear;": 
+                if not "variables_keep" in im_list:
+                     # No variables could be extracted, that is not good
+                     im_list["variables_keep"] = ["ERROR no variables found"]
                 infomap_list_code.append(im_list)
                 is_keep_block = False
                 is_im_block = False
@@ -108,13 +114,13 @@ def extract_infomap_code(code_file, file_encoding):
                     im_list["infomap_name"] = mappath_search.group(1).rsplit('/', 1)[-1]
                         
                 if is_keep_block == True:
-                    if line == ");" or line[0:8] == "filter=(":
+                    if line[-2:] == ");" or line[0:8] == "filter=(":
                         # end of code block with keep variable definitions
                         im_list["variables_keep"] = keep_list
                         is_keep_block = False
                     else:
                         # check if the line is a comment 
-                        if line[0:2] != "/*":
+                        if line and line[0:2] != "/*" and line[0:2] != "*/" and line[0:1] != "%":
                             # add this variable definition to the list
                             keep_list.append(line)
                     
@@ -125,27 +131,41 @@ def extract_infomap_code(code_file, file_encoding):
          
     return infomap_list_code
 
-temp_path = "H:/Daten/Project/Desktop-2020/SampleSEG"
+# Read configuration
+with open('config.json', 'r') as f:
+    config = json.load(f)
+temp_path = config['temp_path']
+path_ignore = config['path_ignore']
+path_list = config['path_list'] 
+write_to_excel = config['write_to_excel']  
+
+
+# write_to_excel = True
+# temp_path = "H:/Daten/Project/Desktop-2020/SampleSEG"
+
 temp_unzip_path = temp_path + "/tempunzip"
 proj_filename = "project.xml"
 
-path_ignore = ["/archiv/", "/_archiv/", "/Archiv/", "/_Archiv/", "/archive/",
-               "/Archive", "/alt/", "/Alt/", "/Archiv_nicht-löschen/",
-               "/00_Archiv/"]
+# path_ignore = ["/archiv/", "/_archiv/", "/Archiv/", "/_Archiv/", "/archive/",
+#                "/Archive", "/alt/", "/Alt/", "/Archiv_nicht-löschen/",
+#                "/00_Archiv/", "/0_Archiv/", "/9_Archiv/", "/X_Archiv/",
+#                "/99_Alte_Anfrage_vor_InfoDesk/"]
 
-path_list = ["O:/Auswertungen/Hotellerie",
-             "O:/Auswertungen/Mobilitaet-Verkehr",
-             "O:/Auswertungen/Bevoelkerung",
-             "P:/SAS/Siedlungsbericht/PROD"]
 
-path_list = ["P:/Automat",
-             "P:/Hotellerie",
-             "P:/OGD/Daten",
-             "P:/SAS/Fuehrungskennzahlen",
-             "P:/SAS/Siedlungsbericht/PROD"]
+# path_list = ["P:/Hotellerie"]
+
+#edit the data
+# config = {}
+# config['temp_path'] = temp_path
+# config['path_ignore'] = path_ignore
+# config['path_list'] = path_list
+# config['write_to_excel'] = write_to_excel
+
+#write it back to the file
+# with open('config.json', 'w') as f:
+#     json.dump(config, f, sort_keys=True, indent=4)
 
 excel_out = temp_path + "/report.xlsx"
-write_to_excel = True
 
 csv_out = temp_path + "/infomap-var-list.csv"
 
@@ -199,13 +219,14 @@ for index, row in df_list_seg.iterrows():
     # unzip the project.xml file from the egp-file (which is a zip-file)
     proj_fullpath = proj_unzip(row["seg_path"], proj_filename, temp_unzip_path)
 
-   # find alle informationmaps in the code element of project.xml
-    im_list_code = extract_infomap_code(proj_fullpath, "utf16")
-    if im_list_code:
-        # add the filename and store in a dataframe
-        df_list_code = pd.DataFrame(im_list_code)
-        df_list_code['filename']=row["seg_path"]
-        df_im_code = df_im_code.append(df_list_code, ignore_index = True)
+    if proj_fullpath:
+        # find alle informationmaps in the code element of project.xml
+        im_list_code = extract_infomap_code(proj_fullpath, "utf16")
+        if im_list_code:
+            # add the filename and store in a dataframe
+            df_list_code = pd.DataFrame(im_list_code)
+            df_list_code['filename']=row["seg_path"].replace('/', '\\')
+            df_im_code = df_im_code.append(df_list_code, ignore_index = True)
 
 # loop through all the SAS code files
 for index, row in df_list_sas.iterrows():
@@ -214,9 +235,8 @@ for index, row in df_list_sas.iterrows():
     if im_list_code:
         # add the filename and store in a dataframe
         df_list_code = pd.DataFrame(im_list_code)
-        df_list_code['filename']=row["sas_path"]
+        df_list_code['filename']=row["sas_path"].replace('/', '\\')
         df_im_code = df_im_code.append(df_list_code, ignore_index = True)
-
 
 if df_im_code.empty==False:
     # transpose the variables column containing a list of variables to a new row variables
